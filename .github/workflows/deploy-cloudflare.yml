@@ -152,25 +152,26 @@ jobs:
           
           echo "🔍 按名字查找已有 KV 命名空间 (NAME=$NAME)..."
           
+          ERRLOG=$(mktemp)
           set +e
-            KV_LIST=$(pnpm wrangler kv namespace list 2>&1)
+            KV_LIST=$(pnpm wrangler kv namespace list 2>"$ERRLOG")
             STATUS=$?
           set -e
           
           if [ $STATUS -ne 0 ]; then
-            echo "$KV_LIST"
+            cat "$ERRLOG"
             exit 1
           fi
           
-          KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
+          KV_ID=$(printf '%s\n' "$KV_LIST" | awk 'f||/^\[/{f=1; print}' | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
           
           if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
             echo "✅ 复用已有 KV 命名空间: $NAME ($KV_ID)"
           elif [ "$CREATE_IF_MISSING" = "true" ]; then
             echo "⚠️ 未找到 $NAME, 按 CREATE_IF_MISSING=true 新建..."
             pnpm wrangler kv namespace create $NAME
-            KV_LIST=$(pnpm wrangler kv namespace list)
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
+            KV_LIST=$(pnpm wrangler kv namespace list 2>/dev/null)
+            KV_ID=$(printf '%s\n' "$KV_LIST" | awk 'f||/^\[/{f=1; print}' | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
           else
             echo "❌ 未找到名为 ${NAME} 的 KV 命名空间, 且未开启 CREATE_IF_MISSING。"
             echo "   为避免每次部署新建空库导致数据丢失, 请设置 secret/var: KV_NAMESPACE_ID"
@@ -195,25 +196,26 @@ jobs:
           
           echo "🔍 按名字查找已有 D1 数据库 (NAME=$NAME)..."
           
+          ERRLOG=$(mktemp)
           set +e
-            DB_LIST=$(pnpm wrangler d1 list --json 2>&1)
+            DB_LIST=$(pnpm wrangler d1 list --json 2>"$ERRLOG")
             STATUS=$?
           set -e
           
           if [ $STATUS -ne 0 ]; then
-            echo "$DB_LIST"
+            cat "$ERRLOG"
             exit 1
           fi
           
-          D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
+          D1_ID=$(printf '%s\n' "$DB_LIST" | awk 'f||/^\[/{f=1; print}' | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
           
           if [ -n "$D1_ID" ] && [ "$D1_ID" != "null" ]; then
             echo "✅ 复用已有 D1 数据库: $NAME ($D1_ID)"
           elif [ "$CREATE_IF_MISSING" = "true" ]; then
             echo "⚠️ 未找到 $NAME, 按 CREATE_IF_MISSING=true 新建..."
             pnpm wrangler d1 create $NAME
-            DB_LIST=$(pnpm wrangler d1 list --json)
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
+            DB_LIST=$(pnpm wrangler d1 list --json 2>/dev/null)
+            D1_ID=$(printf '%s\n' "$DB_LIST" | awk 'f||/^\[/{f=1; print}' | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
           else
             echo "❌ 未找到名为 ${NAME} 的 D1 数据库, 且未开启 CREATE_IF_MISSING。"
             echo "   为避免每次部署新建空库导致数据丢失, 请设置 secret/var: D1_DATABASE_ID"
