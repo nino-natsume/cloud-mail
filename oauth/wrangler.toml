@@ -1,0 +1,28 @@
+# Cloudflare Workers 配置 —— platform-oauth-login（合并：邮箱验证 + OAuth 第三方登录）
+# 部署：wrangler deploy
+# 敏感配置用 wrangler secret put（部署时自动保留）：
+#   GITHUB_CLIENT_ID/SECRET, GITLAB_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET,
+#   TWITTER_CLIENT_ID/SECRET, QQ_APP_ID(在 vars)/QQ_APP_SECRET 等
+
+name = "platform-oauth-login"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# 自定义域名路由（oauth.107211.xyz → 本 Worker）
+routes = [
+  { pattern = "oauth.107211.xyz/*", zone_name = "107211.xyz" }
+]
+
+[vars]
+MICROSOFT_TENANT = "common"
+QQ_APP_ID = "1905609853"
+# SECRET 为敏感签名密钥，禁止提交到仓库；请用以下命令注入（部署时自动保留）：
+#   wrangler secret put SECRET
+
+# [secrets]
+# SECRET = ""
+
+# 配置 / 验证码持久化 KV（绑定名 STORE，与线上一致）
+[[kv_namespaces]]
+binding = "STORE"
+id = "2cce4e96cc13469d98599b3f905ed8c9"

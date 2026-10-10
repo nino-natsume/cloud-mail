@@ -25,9 +25,14 @@ jobs:
       KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID || vars.KV_NAMESPACE_ID }}
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
       PROJECT_LINK: ${{ secrets.PROJECT_LINK || vars.PROJECT_LINK }}
+      # 统一授权中心 SSO 回跳地址 (改造后新增)
+      SITE_URL: ${{ secrets.SITE_URL || vars.SITE_URL || 'https://107211.xyz' }}
+      OAUTH_URL: ${{ secrets.OAUTH_URL || vars.OAUTH_URL || 'https://oauth.107211.xyz' }}
       AI_MODEL: ${{ secrets.AI_MODEL || vars.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct-fast' }}
       CLOUDFLARE_EMAIL: ${{ secrets.CF_EMAIL || vars.CF_EMAIL || false }}
       ANALYSIS_CACHE: ${{ secrets.ANALYSIS_CACHE || vars.ANALYSIS_CACHE || false }}
+      # 是否在找不到同名 KV/D1 时新建空库。默认 false —— 保证自动更新绝不清空/重建数据库。
+      CREATE_IF_MISSING: ${{ secrets.CREATE_IF_MISSING || vars.CREATE_IF_MISSING || 'false' }}
 
 
     outputs:
@@ -127,22 +132,25 @@ jobs:
           sed -i "s|\${LINUXDO_CLIENT_ID}|${LINUXDO_CLIENT_ID}|g" "$CONFIG_FILE"
           sed -i "s|\${LINUXDO_CLIENT_SECRET}|${LINUXDO_CLIENT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${LINUXDO_CALLBACK_URL}|${LINUXDO_CALLBACK_URL}|g" "$CONFIG_FILE"
+          sed -i "s|\${SITE_URL}|${SITE_URL}|g" "$CONFIG_FILE"
+          sed -i "s|\${OAUTH_URL}|${OAUTH_URL}|g" "$CONFIG_FILE"
           
           echo "✅ Environment setup completed."
 
-      - name: ⚡ 设置KV数据库 / Set up KV database
+      - name: ⚡ 设置KV数据库 / Set up KV database (复用已有 · 数据保留)
         working-directory: ./mail-worker
         run: |
           
           CONFIG_FILE="wrangler-action.toml"
           
+          # 1) 显式 ID 优先级最高 —— 数据保留的最可靠方式
           if [ -n "$KV_NAMESPACE_ID" ]; then
             sed -i "s|\${KV_NAMESPACE_ID}|${KV_NAMESPACE_ID}|g" "$CONFIG_FILE"
-            echo "✅ Using the database from environment variables."
+            echo "✅ 使用 KV_NAMESPACE_ID (来自 secret/var): $KV_NAMESPACE_ID"
             exit 0
           fi
           
-          echo "🔍 Checking if the database exists..."
+          echo "🔍 按名字查找已有 KV 命名空间 (NAME=$NAME)..."
           
           set +e
             KV_LIST=$(pnpm wrangler kv namespace list 2>&1)
@@ -153,34 +161,39 @@ jobs:
             echo "$KV_LIST"
             exit 1
           fi
-                  
-          if echo "$KV_LIST" | jq -e ".[] | select(.title == \"$NAME\")" >/dev/null; then
-            echo "✅ Database $NAME already exists."
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
-            echo "KV_NAMESPACE_ID: $KV_ID"
-          else
-            echo "⚠️ Database $NAME does not exist. Starting creation..."
+          
+          KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
+          
+          if [ -n "$KV_ID" ] && [ "$KV_ID" != "null" ]; then
+            echo "✅ 复用已有 KV 命名空间: $NAME ($KV_ID)"
+          elif [ "$CREATE_IF_MISSING" = "true" ]; then
+            echo "⚠️ 未找到 $NAME, 按 CREATE_IF_MISSING=true 新建..."
             pnpm wrangler kv namespace create $NAME
             KV_LIST=$(pnpm wrangler kv namespace list)
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
+            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id" | head -n1)
+          else
+            echo "❌ 未找到名为 ${NAME} 的 KV 命名空间, 且未开启 CREATE_IF_MISSING。"
+            echo "   为避免每次部署新建空库导致数据丢失, 请设置 secret/var: KV_NAMESPACE_ID"
+            exit 1
           fi
           
           sed -i "s|\${KV_NAMESPACE_ID}|$KV_ID|g" "$CONFIG_FILE"
-          echo "✅ Setup completed."
+          echo "✅ KV 绑定完成."
 
-      - name: 🐬 设置D1数据库 / Set up D1 database
+      - name: 🐬 设置D1数据库 / Set up D1 database (复用已有 · 数据保留)
         working-directory: ./mail-worker
         run: |
           
           CONFIG_FILE="wrangler-action.toml"
           
+          # 1) 显式 ID 优先级最高 —— 数据保留的最可靠方式
           if [ -n "$D1_DATABASE_ID" ]; then
             sed -i "s|\${D1_DATABASE_ID}|${D1_DATABASE_ID}|g" "$CONFIG_FILE"
-            echo "✅ Using the database from environment variables."
+            echo "✅ 使用 D1_DATABASE_ID (来自 secret/var): $D1_DATABASE_ID"
             exit 0
           fi
           
-          echo "🔍 Checking if the database exists..."
+          echo "🔍 按名字查找已有 D1 数据库 (NAME=$NAME)..."
           
           set +e
             DB_LIST=$(pnpm wrangler d1 list --json 2>&1)
@@ -192,19 +205,23 @@ jobs:
             exit 1
           fi
           
-          if echo "$DB_LIST" | jq -e ".[] | select(.name == \"$NAME\")" >/dev/null; then
-            echo "✅ Database $NAME already exists."
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
-            echo "D1_DATABASE_ID: $D1_ID"
-          else
-            echo "⚠️ Database $NAME does not exist. Starting creation..."
+          D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
+          
+          if [ -n "$D1_ID" ] && [ "$D1_ID" != "null" ]; then
+            echo "✅ 复用已有 D1 数据库: $NAME ($D1_ID)"
+          elif [ "$CREATE_IF_MISSING" = "true" ]; then
+            echo "⚠️ 未找到 $NAME, 按 CREATE_IF_MISSING=true 新建..."
             pnpm wrangler d1 create $NAME
             DB_LIST=$(pnpm wrangler d1 list --json)
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
+            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid" | head -n1)
+          else
+            echo "❌ 未找到名为 ${NAME} 的 D1 数据库, 且未开启 CREATE_IF_MISSING。"
+            echo "   为避免每次部署新建空库导致数据丢失, 请设置 secret/var: D1_DATABASE_ID"
+            exit 1
           fi
           
           sed -i "s|\${D1_DATABASE_ID}|$D1_ID|g" "$CONFIG_FILE"
-          echo "✅ Setup completed."
+          echo "✅ D1 绑定完成."
 
       - name: 🚀 开始部署 / Start deployment
         id: deploy

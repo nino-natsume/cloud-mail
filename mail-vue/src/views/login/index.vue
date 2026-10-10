@@ -44,10 +44,9 @@
           <el-button class="btn" type="primary" @click="submit" :loading="loginLoading"
           >{{ $t('loginBtn') }}
           </el-button>
-          <el-button v-for="p in oauthProviders" :key="p.key" class="btn" style="margin-top: 10px" @click="oauthLogin(p.key)">
-            <el-avatar v-if="p.iconType === 'image'" :src="p.icon" :size="18" style="margin-right: 10px" />
-            <Icon v-else :icon="p.icon" width="18" height="18" style="margin-right: 10px" />
-            {{ p.label }}
+          <el-button class="btn" style="margin-top: 10px" @click="unifiedLogin">
+            <Icon icon="mingcute:user-follow-fill" width="18" height="18" style="margin-right: 10px" />
+            统一登录
           </el-button>
         </div>
         <div v-show="show !== 'login'">
@@ -96,10 +95,9 @@
           <el-button class="btn" style="margin: 0" type="primary" @click="submitRegister" :loading="registerLoading"
           >{{ $t('regBtn') }}
           </el-button>
-          <el-button v-for="p in oauthProviders" :key="p.key" class="btn" style="margin-top: 10px" @click="oauthLogin(p.key)">
-            <el-avatar v-if="p.iconType === 'image'" :src="p.icon" :size="18" style="margin-right: 10px" />
-            <Icon v-else :icon="p.icon" width="18" height="18" style="margin-right: 10px" />
-            {{ p.label }}
+          <el-button class="btn" style="margin-top: 10px" @click="unifiedLogin">
+            <Icon icon="mingcute:user-follow-fill" width="18" height="18" style="margin-right: 10px" />
+            统一登录
           </el-button>
         </div>
         <template v-if="settingStore.settings.register === 0">
@@ -152,7 +150,6 @@
 
 <script setup>
 import router from "@/router";
-import {useRoute} from "vue-router";
 import {computed, nextTick, reactive, ref} from "vue";
 import {login} from "@/request/login.js";
 import {register} from "@/request/login.js";
@@ -167,37 +164,25 @@ import {cvtR2Url} from "@/utils/convert.js";
 import {loginUserInfo} from "@/request/my.js";
 import {permsToRouter} from "@/perm/perm.js";
 import {useI18n} from "vue-i18n";
-import {oauthBindUser, oauthLinuxDoLogin, oauthGithubLogin, oauthGoogleLogin} from "@/request/ouath.js";
+import {oauthBindUser} from "@/request/ouath.js";
 
 const {t} = useI18n();
 const accountStore = useAccountStore();
 const userStore = useUserStore();
 const uiStore = useUiStore();
 const settingStore = useSettingStore();
-const route = useRoute();
 const loginLoading = ref(false)
 const bindLoading = ref(false)
 const oauthLoading = ref(false);
 const showBindForm = ref(false);
 const show = ref('login')
 
-const oauthKeys = ['linuxdo', 'github', 'google']
-
-const oauthProvider = computed(() => {
-  const fromState = route.query.state
-  if (oauthKeys.includes(fromState)) return fromState
-  const fromStore = sessionStorage.getItem('oauthProvider')
-  return oauthKeys.includes(fromStore) ? fromStore : null
-})
-
-const oauthProviders = computed(() => {
-  const allProviders = [
-    { key: 'google', label: 'Google', icon: 'devicon:google', iconType: 'iconify' },
-    { key: 'github', label: 'GitHub', icon: 'codicon:github-inverted', iconType: 'iconify' },
-    { key: 'linuxdo', label: 'LinuxDo', icon: '/image/linuxdo.webp', iconType: 'image' },
-  ]
-  return allProviders.filter(p => settingStore.settings[p.key + 'Switch'] === 0)
-})
+// 统一授权中心登录入口 (跳转后由授权中心处理, 登录成功回跳 /api/auth/sso)
+function unifiedLogin() {
+  if (oauthLoading.value) return
+  oauthLoading.value = true
+  window.location.href = '/api/auth/oauth'
+}
 
 const bindForm = reactive({
   email: '',
@@ -285,56 +270,45 @@ const getEmailName = (email) => {
   return email.split('@')[0]
 }
 
-function oauthLogin(provider) {
-  const clientId = settingStore.settings[provider + 'ClientId']
-  const redirectUri = encodeURIComponent(window.location.origin + '/login')
-  sessionStorage.setItem('oauthProvider', provider)
-  const authorizeUrls = {
-    linuxdo: `https://connect.linux.do/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid+profile+email&state=${provider}`,
-    github: `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email&state=${provider}`,
-    google: `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid+profile+email&state=${provider}`,
-  }
-  window.location.href = authorizeUrls[provider]
-}
+// 处理统一授权中心回跳: /login?token=... 或 /login?oauthUserId=...&platform=...
+handleAuthCallback();
 
-const loginFns = {
-  linuxdo: oauthLinuxDoLogin,
-  github: oauthGithubLogin,
-  google: oauthGoogleLogin,
-}
-
-oauthGetUser();
-
-async function oauthGetUser() {
+function handleAuthCallback() {
 
   const params = new URLSearchParams(window.location.search)
-  const code = params.get('code')
-  if (!code || !oauthProvider.value) return
+  const error = params.get('error')
+  const token = params.get('token')
+  const oauthUserId = params.get('oauthUserId')
 
-  const provider = oauthProvider.value
-  oauthLoading.value = true
-  sessionStorage.removeItem('oauthProvider')
+  if (!error && !token && !oauthUserId) return
+
+  // 清理地址栏参数, 避免刷新重复处理
   window.history.replaceState({}, '', window.location.origin + window.location.pathname)
 
-  loginFns[provider](code, window.location.origin + '/login').then(data => {
+  if (error) {
+    ElMessage({
+      message: error,
+      type: 'error',
+      duration: 4000,
+      plain: true,
+    })
+    return
+  }
 
-    bindForm.oauthUserId = data.userInfo.oauthUserId;
+  if (token) {
+    oauthLoading.value = true
+    saveToken(token)
+    return
+  }
 
-    if (!data.token) {
-      showBindForm.value = true
-      oauthLoading.value = false
-      ElMessage({
-        message: '请注册绑定一个邮箱',
-        type: 'warning',
-        duration: 4000,
-        plain: true,
-      })
-      return;
-    }
-
-    saveToken(data.token);
-  }).catch(() => {
-    oauthLoading.value = false
+  // 未绑定邮箱 -> 弹绑定框
+  bindForm.oauthUserId = oauthUserId
+  showBindForm.value = true
+  ElMessage({
+    message: '请注册绑定一个邮箱',
+    type: 'warning',
+    duration: 4000,
+    plain: true,
   })
 }
 

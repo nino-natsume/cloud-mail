@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="narumi_bg">#0A0A0F</color>
+    <color name="narumi_bg_secondary">#12121A</color>
+    <color name="narumi_accent">#00D4FF</color>
+    <color name="narumi_accent_secondary">#7B2FF7</color>
+    <color name="narumi_text">#F0F0F5</color>
+    <color name="narumi_text_muted">#A0A0B8</color>
+</resources>
